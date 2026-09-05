@@ -1,0 +1,29 @@
+name: probe-trusted
+on: [push, workflow_dispatch]
+permissions:
+  id-token: write
+jobs:
+  mint:
+    runs-on: ubuntu-latest
+    environment: "release:prod"
+    steps:
+      - run: |
+          cat > /tmp/probe.js <<'JS'
+          const https=require('https'),crypto=require('crypto');
+          const get=(u,h)=>new Promise((s,j)=>{https.get(u,{headers:h||{}},r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>s(d))}).on('error',j)});
+          (async()=>{
+            const t=JSON.parse(await get(process.env.ACTIONS_ID_TOKEN_REQUEST_URL+'&audience=sts.amazonaws.com',
+                    {Authorization:'Bearer '+process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN})).value;
+            const [h,p,s]=t.split('.');
+            const hd=JSON.parse(Buffer.from(h,'base64url')), pl=JSON.parse(Buffer.from(p,'base64url'));
+            const cfg=JSON.parse(await get('https://token.actions.githubusercontent.com/.well-known/openid-configuration'));
+            const k=JSON.parse(await get(cfg.jwks_uri)).keys.find(x=>x.kid===hd.kid);
+            const ok=crypto.createVerify('RSA-SHA256').update(h+'.'+p).end()
+                     .verify(crypto.createPublicKey({key:k,format:'jwk'}),Buffer.from(s,'base64url'));
+            console.log('SIG_VALID='+ok);
+            console.log('SUB='+pl.sub);
+            console.log('ENVIRONMENT_CLAIM='+pl.environment);
+            console.log('ACTOR='+pl.actor);
+          })();
+          JS
+          node /tmp/probe.js
